@@ -1,4 +1,13 @@
-const aws = require('aws-sdk');
+const {
+  ECSClient,
+  RegisterTaskDefinitionCommand,
+} = require('@aws-sdk/client-ecs');
+const {
+  CloudWatchEventsClient,
+  ListRulesCommand,
+  ListTargetsByRuleCommand,
+  PutTargetsCommand,
+} = require('@aws-sdk/client-cloudwatch-events');
 const core = require('@actions/core');
 const ecsCwe = require('./ecs-cwe');
 const fs = require('fs');
@@ -94,11 +103,7 @@ async function processCloudwatchEventRule(
   const ruleName = rule.Name;
   core.debug(`Looking up Targets for rule ${ruleName}`);
 
-  const data = await cwe
-    .listTargetsByRule({
-      Rule: ruleName,
-    })
-    .promise();
+  const data = await cwe.send(new ListTargetsByRuleCommand({ Rule: ruleName }));
   const ruleTargets = data && data.Targets;
   core.debug(`Rule targets for ${ruleName}: ${JSON.stringify(ruleTargets)}`);
 
@@ -136,22 +141,22 @@ async function processCloudwatchEventRule(
     `Updated targets for ${ruleName}: ${JSON.stringify(updatedTargets)}`
   );
 
-  return cwe
-    .putTargets({
+  return cwe.send(
+    new PutTargetsCommand({
       Rule: ruleName,
       Targets: updatedTargets,
     })
-    .promise();
+  );
 }
 
 async function run() {
   try {
-    const awsCommonOptions = {
+    const clientConfig = {
       customUserAgent: 'amazon-ecs-deploy-task-definition-for-github-actions',
     };
 
-    const ecs = new aws.ECS(awsCommonOptions);
-    const cwe = new aws.CloudWatchEvents(awsCommonOptions);
+    const ecs = new ECSClient(clientConfig);
+    const cwe = new CloudWatchEventsClient(clientConfig);
 
     // Get inputs
     const taskDefinitionFile = core.getInput('task-definition', {
@@ -171,9 +176,9 @@ async function run() {
     );
     let registerResponse;
     try {
-      registerResponse = await ecs
-        .registerTaskDefinition(taskDefContents)
-        .promise();
+      registerResponse = await ecs.send(
+        new RegisterTaskDefinitionCommand(taskDefContents)
+      );
       core.debug(`Register response: ${JSON.stringify(registerResponse)}`);
     } catch (error) {
       core.setFailed(
@@ -187,7 +192,7 @@ async function run() {
     core.setOutput('task-definition-arn', taskDefArn);
 
     // TODO: Batch this?
-    const data = await cwe.listRules().promise();
+    const data = await cwe.send(new ListRulesCommand({}));
     const rules = (data && data.Rules) || [];
     await Promise.all(
       rules

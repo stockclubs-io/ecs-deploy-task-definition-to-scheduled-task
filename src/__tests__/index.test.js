@@ -12,27 +12,30 @@ const mockEcsRegisterTaskDef = jest.fn();
 const mockCweListRules = jest.fn();
 const mockCweListTargetsByRule = jest.fn();
 const mockCwePutTargets = jest.fn();
-jest.mock('aws-sdk', () => {
-  return {
-    config: {
-      region: 'fake-region',
-    },
-    CloudWatchEvents: jest.fn(() => ({
-      listRules: mockCweListRules,
-      listTargetsByRule: mockCweListTargetsByRule,
-      putTargets: mockCwePutTargets,
-    })),
-    ECS: jest.fn(() => ({
-      registerTaskDefinition: mockEcsRegisterTaskDef,
-    })),
-  };
-});
 
-function awsResponsePromise(val) {
-  return () => ({
-    promise: async () => (typeof val === 'function' ? val() : val),
-  });
-}
+jest.mock('@aws-sdk/client-ecs', () => ({
+  ECSClient: jest.fn(() => ({
+    send: (command) => mockEcsRegisterTaskDef(command),
+  })),
+  RegisterTaskDefinitionCommand: jest.fn((params) => params),
+}));
+
+jest.mock('@aws-sdk/client-cloudwatch-events', () => ({
+  CloudWatchEventsClient: jest.fn(() => ({
+    send: (command) => {
+      if (command._cmd === 'ListRules') return mockCweListRules(command);
+      if (command._cmd === 'ListTargetsByRule')
+        return mockCweListTargetsByRule(command);
+      if (command._cmd === 'PutTargets') return mockCwePutTargets(command);
+    },
+  })),
+  ListRulesCommand: jest.fn((params) => ({ _cmd: 'ListRules', ...params })),
+  ListTargetsByRuleCommand: jest.fn((params) => ({
+    _cmd: 'ListTargetsByRule',
+    ...params,
+  })),
+  PutTargetsCommand: jest.fn((params) => ({ _cmd: 'PutTargets', ...params })),
+}));
 
 describe('Deploy to ECS', () => {
   beforeEach(() => {
@@ -75,98 +78,75 @@ describe('Deploy to ECS', () => {
       throw new Error(`Unknown path ${pathInput}`);
     });
 
-    mockEcsRegisterTaskDef.mockImplementation(() => {
-      return {
-        promise() {
-          return Promise.resolve({ taskDefinition: { taskDefinitionArn } });
-        },
-      };
+    mockEcsRegisterTaskDef.mockResolvedValue({
+      taskDefinition: { taskDefinitionArn },
     });
 
-    mockCweListRules.mockImplementation(() => {
-      return {
-        promise() {
-          return Promise.resolve({
-            Rules: [
-              {
-                Name: 'Sync-Task',
-                Arn: 'arn:aws:events:us-east-1:00000000001:rule/Sync-Task',
-                State: 'ENABLED',
-                Description: 'Foooo.',
-                ScheduleExpression: 'rate(15 minutes)',
-                EventBusName: 'default',
-              },
-              {
-                Name: 'Prefixed-Task',
-                Arn: 'arn:aws:events:us-east-1:00000000001:rule/Prefixed-Task',
-                State: 'ENABLED',
-                Description: 'Barrr.',
-                ScheduleExpression: 'rate(20 minutes)',
-                EventBusName: 'default',
-              },
-            ],
-          });
+    mockCweListRules.mockResolvedValue({
+      Rules: [
+        {
+          Name: 'Sync-Task',
+          Arn: 'arn:aws:events:us-east-1:00000000001:rule/Sync-Task',
+          State: 'ENABLED',
+          Description: 'Foooo.',
+          ScheduleExpression: 'rate(15 minutes)',
+          EventBusName: 'default',
         },
-      };
+        {
+          Name: 'Prefixed-Task',
+          Arn: 'arn:aws:events:us-east-1:00000000001:rule/Prefixed-Task',
+          State: 'ENABLED',
+          Description: 'Barrr.',
+          ScheduleExpression: 'rate(20 minutes)',
+          EventBusName: 'default',
+        },
+      ],
     });
 
-    mockCweListTargetsByRule.mockImplementation(() => {
-      return {
-        promise() {
-          return Promise.resolve({
-            Targets: [
-              {
-                Id: 'Baz',
-                Arn:
-                  'arn:aws:ecs:<REGION>:<ACCOUNT ID>:cluster/another-cluster',
-                RoleArn: 'arn:aws:iam::<ACCOUNT ID>:role/ecsEventsRole',
-                Input:
-                  '{"containerOverrides":[{"name":"Demo","command":["sleep"," 50"]}]}',
-                EcsParameters: {
-                  TaskDefinitionArn:
-                    'arn:aws:ecs:<REGION>:<ACCOUNT ID>:task-definition/task-def-family:1',
-                  TaskCount: 1,
-                  LaunchType: 'EC2',
-                },
-              },
-              {
-                Id: 'Foo',
-                Arn: 'arn:aws:ecs:<REGION>:<ACCOUNT ID>:cluster/fake-cluster',
-                RoleArn: 'arn:aws:iam::<ACCOUNT ID>:role/ecsEventsRole',
-                Input:
-                  '{"containerOverrides":[{"name":"Demo","command":["sleep"," 50"]}]}',
-                EcsParameters: {
-                  TaskDefinitionArn: taskDefinitionArn,
-                  TaskCount: 1,
-                  LaunchType: 'EC2',
-                },
-              },
-              {
-                Id: 'Bar',
-                Arn: 'arn:aws:ecs:<REGION>:<ACCOUNT ID>:cluster/fake-cluster',
-                RoleArn: 'arn:aws:iam::<ACCOUNT ID>:role/ecsEventsRole',
-                Input:
-                  '{"containerOverrides":[{"name":"Demo","command":["sleep"," 50"]}]}',
-                EcsParameters: {
-                  TaskDefinitionArn:
-                    'arn:aws:ecs:<REGION>:<ACCOUNT ID>:task-definition/another-task-family:1',
-                  TaskCount: 1,
-                  LaunchType: 'EC2',
-                },
-              },
-            ],
-          });
+    mockCweListTargetsByRule.mockResolvedValue({
+      Targets: [
+        {
+          Id: 'Baz',
+          Arn: 'arn:aws:ecs:<REGION>:<ACCOUNT ID>:cluster/another-cluster',
+          RoleArn: 'arn:aws:iam::<ACCOUNT ID>:role/ecsEventsRole',
+          Input:
+            '{"containerOverrides":[{"name":"Demo","command":["sleep"," 50"]}]}',
+          EcsParameters: {
+            TaskDefinitionArn:
+              'arn:aws:ecs:<REGION>:<ACCOUNT ID>:task-definition/task-def-family:1',
+            TaskCount: 1,
+            LaunchType: 'EC2',
+          },
         },
-      };
+        {
+          Id: 'Foo',
+          Arn: 'arn:aws:ecs:<REGION>:<ACCOUNT ID>:cluster/fake-cluster',
+          RoleArn: 'arn:aws:iam::<ACCOUNT ID>:role/ecsEventsRole',
+          Input:
+            '{"containerOverrides":[{"name":"Demo","command":["sleep"," 50"]}]}',
+          EcsParameters: {
+            TaskDefinitionArn: taskDefinitionArn,
+            TaskCount: 1,
+            LaunchType: 'EC2',
+          },
+        },
+        {
+          Id: 'Bar',
+          Arn: 'arn:aws:ecs:<REGION>:<ACCOUNT ID>:cluster/fake-cluster',
+          RoleArn: 'arn:aws:iam::<ACCOUNT ID>:role/ecsEventsRole',
+          Input:
+            '{"containerOverrides":[{"name":"Demo","command":["sleep"," 50"]}]}',
+          EcsParameters: {
+            TaskDefinitionArn:
+              'arn:aws:ecs:<REGION>:<ACCOUNT ID>:task-definition/another-task-family:1',
+            TaskCount: 1,
+            LaunchType: 'EC2',
+          },
+        },
+      ],
     });
 
-    mockCwePutTargets.mockImplementation(() => {
-      return {
-        promise() {
-          return Promise.resolve();
-        },
-      };
-    });
+    mockCwePutTargets.mockResolvedValue(undefined);
   });
 
   test('registers the task definition contents', async () => {
@@ -366,11 +346,7 @@ describe('Deploy to ECS', () => {
 
   test('error is caught if listRules fails', async () => {
     const msg = 'Foo bar';
-    mockCweListRules.mockImplementation(
-      awsResponsePromise(() => {
-        throw new Error(msg);
-      })
-    );
+    mockCweListRules.mockRejectedValue(new Error(msg));
 
     await run();
 
